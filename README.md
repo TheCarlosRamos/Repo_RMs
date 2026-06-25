@@ -1,187 +1,343 @@
+# Reconstrução de Imagens de Ressonância Magnética com Modelos de Difusão e Diferentes Estratégias de Amostragem do Espaço-k
 
+## Visão Geral
 
-#  MRI Reconstruction with Conditioned Diffusion (Cartesian, Radial & Spiral)
+Este repositório implementa modelos probabilísticos de difusão para reconstrução de imagens de Ressonância Magnética (RM) a partir de dados subamostrados no espaço de Fourier (*k-space*).
 
-Este projeto implementa reconstrução de imagens de ressonância magnética (MRI) subamostradas utilizando **modelos de difusão condicionada**, explorando diferentes estratégias de amostragem no espaço-k:
+O objetivo principal é investigar o impacto de diferentes trajetórias de aquisição no desempenho da reconstrução utilizando modelos generativos baseados em difusão.
 
-*  Cartesiana
-*  Radial
-*  Espiral
+As seguintes estratégias de amostragem foram implementadas:
 
-O objetivo é comparar o impacto do padrão de aquisição na qualidade da reconstrução.
+- Amostragem Cartesiana
+- Amostragem Radial
+- Amostragem Espiral
 
-***
+---
 
-##  Dataset
+# Motivação
 
-* Dataset: **fastMRI (multi-coil knee)**
-* Caminho utilizado:
-  ```bash
-  /kaggle/input/datasets/arafatshovon/fastmri-kneemulticoil
-  ```
-* Total de arquivos: **194 volumes** 
-Cada amostra:
+A aquisição completa do espaço-k em exames de RM possui elevado custo temporal, aumentando:
 
-* Seleciona um slice aleatório
-* Trabalha no espaço-k complexo (real + imaginário)
+- tempo total de aquisição;
+- suscetibilidade a movimento do paciente;
+- desconforto durante o exame;
+- custos operacionais.
 
-***
+Uma abordagem clássica para reduzir o tempo de aquisição consiste em subamostrar o espaço-k, adquirindo apenas uma fração das medidas originalmente necessárias.
 
-##  Pipeline
+Entretanto, a subamostragem transforma o problema de reconstrução em um problema inverso mal condicionado:
 
-### 1. Subamostragem do espaço-k
+$$
+y = PFx + n
+$$
 
-Cada abordagem utiliza uma máscara distinta:
+onde:
 
-####  Cartesiana
+- $x$ representa a imagem desconhecida;
+- $F$ é a Transformada Discreta de Fourier bidimensional;
+- $P$ representa o operador de subamostragem;
+- $y$ corresponde às medidas adquiridas;
+- $n$ representa ruído de aquisição.
 
-* Linhas horizontais com:
-  * Região central densa (low-frequency)
-  * Amostragem aleatória nas demais
-* Fator de aceleração \~4 
-####  Radial
+Como o número de medidas torna-se inferior ao número de incógnitas:
 
-* Linhas passando pelo centro em múltiplos ângulos
-* Número fixo de raios (ex: 30) 
-####  Espiral
+$$
+M < N
+$$
 
-* Máscara baseada em função senoidal radial + angular
-* Padrão contínuo não-linear 
-***
+existem infinitas soluções compatíveis com as observações disponíveis.
 
-### 2. Conversão para imagem
+Modelos de difusão fornecem um mecanismo probabilístico para restringir esse espaço de soluções e recuperar imagens fisicamente plausíveis.
 
-Transformação:
+---
 
-```python
-ifft2 → magnitude → combinação de coils → normalização
-```
+# Modelos de Difusão
 
-***
+Os modelos de difusão pertencem à classe dos modelos probabilísticos generativos baseados em processos de Markov.
 
-### 3. Modelo de Difusão
+O processo direto consiste em adicionar ruído gaussiano progressivamente à imagem:
 
-* Passos de difusão: **T = 50** * Ruído progressivo:
-  * β ∈ \[1e-4, 0.02]
-* Predição de ruído (ε-model)
+$$
+q(x_t|x_{t-1}) = \mathcal{N}(x_t;\sqrt{1-\beta_t}x_{t-1},\beta_t I)
+$$
 
-#### Arquitetura (UNet simplificada):
+Após um número suficientemente grande de etapas:
 
-* Entrada: 2 canais (imagem ruidosa + condição)
-* Camadas:
-  * Conv → ReLU → Conv → ReLU (stack)
-* Saída: 1 canal (ruído previsto) 
-***
+$$
+x_T \sim \mathcal{N}(0,I)
+$$
 
-### 4. Condicionamento
+Durante o treinamento, a rede aprende o processo reverso:
 
-O modelo recebe:
+$$
+p_\theta(x_{t-1}|x_t)
+$$
+
+permitindo reconstruir iterativamente a imagem original a partir de amostras ruidosas.
+
+---
+
+# Formulação Matemática
+
+O processo de difusão direto pode ser escrito como:
+
+$$
+x_t = \sqrt{\bar{\alpha}_t}x_0 + \sqrt{1-\bar{\alpha}_t}\epsilon
+$$
+
+onde:
+
+- $x_0$ é a imagem original;
+- $\epsilon \sim \mathcal{N}(0,I)$;
+- $\bar{\alpha}_t$ representa o produto acumulado dos coeficientes de preservação do sinal.
+
+A rede é treinada para estimar o ruído adicionado:
+
+$$
+\epsilon_\theta(x_t,t)
+$$
+
+utilizando a função perda:
+
+$$
+L = \mathbb{E}\left[\left\|\epsilon-\epsilon_\theta(x_t,t)\right\|_2^2\right]
+$$
+
+---
+
+# Pipeline Experimental
+
+## 1. Aquisição da imagem de referência
+
+Uma imagem de RM totalmente amostrada é utilizada como referência (*ground truth*).
+
+---
+
+## 2. Transformada de Fourier
+
+A imagem é convertida para o domínio da frequência:
+
+$$
+K = \mathcal{F}(x)
+$$
+
+---
+
+## 3. Aplicação da máscara de amostragem
+
+Uma máscara específica é aplicada ao espaço-k:
+
+$$
+K_u = M \odot K
+$$
+
+onde:
+
+- $M$ representa a máscara de amostragem;
+- $\odot$ representa multiplicação elemento a elemento.
+
+---
+
+## 4. Reconstrução inicial
+
+Uma reconstrução inicial é obtida utilizando a transformada inversa:
+
+$$
+x_u = \mathcal{F}^{-1}(K_u)
+$$
+
+Essa imagem contém artefatos decorrentes da subamostragem.
+
+---
+
+## 5. Processo de difusão
+
+A imagem reconstruída é progressivamente refinada pelo modelo de difusão até a obtenção da reconstrução final:
+
+$$
+\hat{x}
+$$
+
+---
+
+# Estratégias de Amostragem
+
+## 1. Amostragem Cartesiana
+
+Arquivo correspondente:
 
 ```text
-[x_t (imagem ruidosa), imagem subamostrada]
+difusao12-cartesiana.ipynb
 ```
 
-***
+### Características
 
-### 5. Loss
+- aquisição em linhas horizontais do espaço-k;
+- compatibilidade direta com FFT convencional;
+- implementação computacional simples;
+- padrão dominante na maioria dos scanners clínicos.
 
-Mean Squared Error (MSE):
+### Vantagens
 
-```math
-L = || ε_pred - ε_real ||²
+- menor custo computacional;
+- reconstrução rápida;
+- implementação simples.
+
+### Desvantagens
+
+- elevada sensibilidade a movimento;
+- artefatos periódicos de aliasing quando subamostrada.
+
+---
+
+## 2. Amostragem Radial
+
+Arquivo correspondente:
+
+```text
+difusao12-radial.ipynb
 ```
 
-***
+### Características
 
-### 6. Reconstrução (Sampling)
+- aquisição ao longo de projeções angulares;
+- cobertura densa da região central do espaço-k;
+- elevada robustez a movimento.
 
-Processo reverso:
+### Vantagens
 
-* Inicia com ruído puro
-* Aplica passos de denoising
-* **Impõe consistência no espaço-k** a cada etapa:
+- melhor preservação das baixas frequências;
+- redução de artefatos de movimento;
+- degradação visual mais suave.
 
-```python
-k = mask * k_us + (1-mask) * k_pred
+### Desvantagens
+
+- necessidade de reconstrução não cartesiana;
+- maior custo computacional.
+
+---
+
+## 3. Amostragem Espiral
+
+Arquivo correspondente:
+
+```text
+difusao12-spiral12.ipynb
 ```
 
-Isso garante fidelidade aos dados medidos.
+### Características
 
-***
+- trajetória contínua em espiral;
+- elevada eficiência amostral;
+- cobertura uniforme do espaço-k.
 
-##  Resultados
+### Vantagens
 
-###  Cartesiana
+- maior eficiência de aquisição;
+- menor tempo de escaneamento;
+- excelente cobertura das baixas frequências.
 
-* **PSNR médio:** 26.36 dB
-* **SSIM médio:** 0.6105 
- Melhor desempenho geral  
- Estrutura preservada  
- Pode gerar artefatos de aliasing direcional
+### Desvantagens
 
-***
+- elevada complexidade computacional;
+- maior sensibilidade a imperfeições do gradiente;
+- necessidade de reconstrução via NUFFT ou gridding.
 
-###  Radial
+---
 
-* **PSNR:** 22.28 dB
-* **SSIM:** 0.5393 
- Robustez a aliasing  
- Menos artefatos estruturados  
- Menor fidelidade quantitativa
+# Comparação das Estratégias
 
-***
+| Método | Cobertura do Espaço-k | Robustez ao Movimento | Artefato Predominante | Complexidade |
+|--------|----------------------|-----------------------|----------------------|-------------|
+| Cartesiana | Linear | Baixa | Aliasing periódico | Baixa |
+| Radial | Angular | Alta | Streaking | Média |
+| Espiral | Contínua | Alta | Blur residual | Alta |
 
-###  Espiral
+---
 
-* **PSNR:** 23.01 dB
-* **SSIM:** 0.6754 
- Melhor SSIM (percepção estrutural)  
- Reconstruções mais suaves  
- Maior instabilidade durante treino (picos de loss observados)
+# Métricas de Avaliação
 
-***
+## Mean Squared Error (MSE)
 
-##  Comparação Geral
+$$
+MSE = \frac{1}{N}\sum_{i=1}^{N}(x_i-\hat{x}_i)^2
+$$
 
-| Trajetória | PSNR ↑      | SSIM ↑      | Característica principal    |
-| ---------- | ----------- | ----------- | --------------------------- |
-| Cartesiana |  Mais alto | Médio       | Melhor fidelidade numérica  |
-| Radial     | Baixo       | Baixo       | Robustez a ruído            |
-| Espiral    | Médio       |  Mais alto | Melhor qualidade perceptual |
+---
 
-***
+## Peak Signal-to-Noise Ratio (PSNR)
 
-##  Observações
+$$
+PSNR = 20\log_{10}\left(\frac{MAX_I}{\sqrt{MSE}}\right)
+$$
 
-* O **condicionamento com imagem subamostrada** foi essencial para estabilidade.
-* A **consistência no espaço-k** melhorou bastante os resultados.
-* Modelos de difusão conseguem:
-  * Reconstruir detalhes finos
-  * Reduzir artefatos clássicos de undersampling
+---
 
-***
+## Structural Similarity Index Measure (SSIM)
 
-##  Possíveis melhorias
+$$
+SSIM(x,\hat{x}) =
+\frac{
+(2\mu_x\mu_y+C_1)(2\sigma_{xy}+C_2)
+}{
+(\mu_x^2+\mu_y^2+C_1)(\sigma_x^2+\sigma_y^2+C_2)
+}
+$$
 
-* Usar UNet mais profunda (skip-connections reais)
-* Aumentar número de steps (T)
-* Treinar com batch > 1
-* Adicionar atenção espacial
-* Testar outras strategies de máscara (Poisson-disc)
-* Aplicar multi-scale supervision
+---
 
-***
+# Dependências
 
-##  Conclusão
+Instale as dependências utilizando:
 
-* A escolha da trajetória impacta diretamente:
-  * Qualidade perceptual
-  * Fidelidade quantitativa
+```bash
+pip install -r requirements.txt
+```
 
- **Cartesiana**: melhor PSNR (mais precisa)  
- **Espiral**: melhor SSIM (mais agradável visualmente)  
- **Radial**: mais robusta, porém menos precisa
+Pacotes principais:
 
-O modelo de difusão condicionado demonstrou ser uma abordagem eficaz e flexível para reconstrução de MRI sob diferentes padrões de aquisição.
+```text
+numpy
+scipy
+matplotlib
+torch
+torchvision
+scikit-image
+opencv-python
+tqdm
+```
 
+Dependências opcionais para trajetórias não cartesianas:
+
+```text
+torchkbnufft
+sigpy
+bart
+```
+
+
+---
+
+# Objetivos Experimentais
+
+Este projeto busca avaliar:
+
+- desempenho de modelos de difusão em reconstrução de RM;
+- impacto do padrão de amostragem sobre a qualidade da reconstrução;
+- robustez a elevadas taxas de subamostragem;
+- preservação estrutural das imagens reconstruídas;
+- viabilidade da utilização clínica de modelos generativos em aquisição acelerada.
+
+---
+
+# Possíveis Extensões
+
+- DDPM condicionais;
+- DDIM para aceleração da inferência;
+- reconstrução multi-coil;
+- integração com Parallel Imaging;
+- integração com Compressed Sensing;
+- utilização de dados clínicos reais;
+- treinamento em domínio complexo;
+- modelos latentes de difusão.
 
